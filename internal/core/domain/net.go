@@ -94,6 +94,15 @@ func (n *Net) GetAgent(id string) (Agent, bool) {
 	return agent, ok
 }
 
+func (n *Net) GetConnection(port PortID) (*PortID, bool) {
+	conn := n.connections[port]
+	if conn == nil {
+		return nil, false
+	}
+	c := *conn
+	return &c, true
+}
+
 func (n *Net) RemoveAgent(id string) {
 	// Desconecta todas as portas primeiro
 	agent, exists := n.agents[id]
@@ -269,16 +278,37 @@ func (n *Net) applyRule(
 	// Instancia novos agentes
 	idMap := make(map[string]string)
 	newAgents := make([]Agent, 0, len(rule.Agents))
+	inheritedA := false
+	inheritedB := false
 	for _, ra := range rule.Agents {
 		newID := fmt.Sprintf("%s_%s_%s", pair.AgentAID, pair.AgentBID, ra.ID)
 		idMap[ra.ID] = newID
+		cfg := ra.Config
+		if !inheritedA && ra.Type == agentA.GetType() {
+			if extCfg := agentA.GetConfig(); len(extCfg) != 0 {
+				cfg = extCfg
+				inheritedA = true
+			}
+		}
+		if !inheritedB && ra.Type == agentB.GetType() {
+			if extCfg := agentB.GetConfig(); len(extCfg) != 0 {
+				cfg = extCfg
+				inheritedB = true
+			}
+		}
 		snap := AgentSnapshot{
 			ID:        newID,
 			Type:      ra.Type,
 			State:     StateIdle.String(),
-			Config:    ra.Config,
+			Config:    cfg,
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
+		}
+		if ra.Type == agentA.GetType() && agentA.GetInput() != nil {
+			snap.Input = agentA.GetInput()
+		}
+		if ra.Type == agentB.GetType() && agentB.GetInput() != nil {
+			snap.Input = agentB.GetInput()
 		}
 		agent, err := registry.Create(snap)
 		if err != nil {

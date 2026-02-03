@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/diogoX451/archon/internal/events"
+	"github.com/diogoX451/archon/pkg/types"
 	"github.com/nats-io/nats.go"
 )
 
@@ -100,7 +101,7 @@ func (n *NATSBus) SetupArchonStreams() error {
 	if err := n.CreateStream(events.StreamConfig{
 		Name:      "ARCHON_INTERACTIONS",
 		Subjects:  []string{"archon.interaction.>"},
-		Retention: events.RetentionWorkQueue,
+		Retention: interactionsRetention(),
 		MaxMsgs:   100000,
 		MaxAge:    24 * time.Hour,
 		Storage:   events.StorageFile,
@@ -144,6 +145,17 @@ func (n *NATSBus) SetupArchonStreams() error {
 	}
 
 	return nil
+}
+
+func interactionsRetention() events.RetentionPolicy {
+	switch strings.ToLower(types.Getenv("ARCHON_INTERACTIONS_RETENTION", "workqueue")) {
+	case "limits":
+		return events.RetentionLimits
+	case "interest":
+		return events.RetentionInterest
+	default:
+		return events.RetentionWorkQueue
+	}
 }
 
 // Publish envia mensagem bruta

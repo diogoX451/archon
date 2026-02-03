@@ -66,6 +66,8 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	logEvents := strings.TrimSpace(types.Getenv("ARCHON_LOG_EVENTS", "")) != ""
+
 	if err := loadRules(ctx, redisClient, rules, registry); err != nil {
 		log.Fatal("load rules:", err)
 	}
@@ -83,7 +85,7 @@ func main() {
 	// Inicia consumo
 	log.Println("Worker started:", cfg.App.WorkerID)
 
-	if err := runWorker(ctx, executor, eventBus, natsBus, redisClient, registry, rules); err != nil {
+	if err := runWorker(ctx, executor, eventBus, natsBus, redisClient, registry, rules, logEvents); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -96,14 +98,25 @@ func runWorker(
 	store *redisstore.RedisStore,
 	registry domain.AgentRegistry,
 	rules *domain.RuleRegistry,
+	logEvents bool,
 ) error {
 	// Handler para interações
 	interactionHandler := func(ctx context.Context, netID string, pair domain.ActivePair) error {
-		return executor.ExecuteInteraction(ctx, netID, pair)
+		if logEvents {
+			log.Printf("interaction pending net=%s pair=%s:%s", netID, pair.AgentAID, pair.AgentBID)
+		}
+		if err := executor.ExecuteInteraction(ctx, netID, pair); err != nil {
+			log.Printf("interaction error net=%s pair=%s:%s err=%v", netID, pair.AgentAID, pair.AgentBID, err)
+			return err
+		}
+		return nil
 	}
 
 	// Handler para respostas
 	responseHandler := func(ctx context.Context, correlationID string, data domain.Data) error {
+		if logEvents {
+			log.Printf("response received correlation_id=%s bytes=%d", correlationID, len(data))
+		}
 		// Encontra qual agente estava esperando
 		netID, agentID, err := executor.FindWaitingAgent(ctx, correlationID)
 		if err != nil {
@@ -117,6 +130,9 @@ func runWorker(
 		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			return err
 		}
+		if logEvents {
+			log.Printf("command spawn workflow=%s agents=%d conns=%d", event.WorkflowID, len(event.Blueprint.Agents), len(event.Blueprint.Connections))
+		}
 		if err := handleSpawn(ctx, store, bus, registry, rules, event); err != nil {
 			return err
 		}
@@ -127,6 +143,9 @@ func runWorker(
 		var event types.AddAgentEvent
 		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			return err
+		}
+		if logEvents {
+			log.Printf("command add_agent workflow=%s agent=%s", event.WorkflowID, event.Agent.ID)
 		}
 		if err := handleAddAgent(ctx, store, event); err != nil {
 			return err
@@ -139,6 +158,9 @@ func runWorker(
 		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			return err
 		}
+		if logEvents {
+			log.Printf("command connect workflow=%s from=%s:%s to=%s:%s", event.WorkflowID, event.From.AgentID, event.From.Port, event.To.AgentID, event.To.Port)
+		}
 		if err := handleConnect(ctx, store, bus, registry, rules, event); err != nil {
 			return err
 		}
@@ -149,6 +171,9 @@ func runWorker(
 		var event types.DefineRuleEvent
 		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			return err
+		}
+		if logEvents {
+			log.Printf("command define_rule %s|%s", event.Rule.AgentAType, event.Rule.AgentBType)
 		}
 		if err := handleDefineRule(ctx, rules, store, registry, event); err != nil {
 			return err
@@ -190,10 +215,18 @@ func handleSpawn(
 ) error {
 	now := time.Now()
 
+	incoming := make(map[string]bool, len(event.Blueprint.Agents))
+	for _, c := range event.Blueprint.Connections {
+		to := parsePortRef(c.To)
+		if to.AgentID != "" {
+			incoming[to.AgentID] = true
+		}
+	}
+
 	agents := make(map[types.AgentID]*types.AgentSnapshot, len(event.Blueprint.Agents))
-	for i, a := range event.Blueprint.Agents {
+	for _, a := range event.Blueprint.Agents {
 		input := types.Data(nil)
-		if len(event.Blueprint.Connections) == 0 && len(event.Blueprint.Agents) == 1 && i == 0 {
+		if !incoming[a.ID] && event.Input != nil {
 			input = event.Input
 		}
 		agents[types.AgentID(a.ID)] = &types.AgentSnapshot{

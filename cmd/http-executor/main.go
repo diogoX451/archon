@@ -38,8 +38,9 @@ type needEvent struct {
 }
 
 func main() {
-	natsURL := getenv("ARCHON_NATS_URL", "nats://localhost:4222")
-	apiURL := getenv("ARCHON_API_URL", "http://localhost:8080")
+	natsURL := types.Getenv("ARCHON_NATS_URL", "nats://localhost:4222")
+	apiURL := types.Getenv("ARCHON_API_URL", "http://localhost:8080")
+	needSubject := types.Getenv("ARCHON_NEED_SUBJECT", "archon.need.http")
 
 	bus, err := natsevents.New(natsevents.Config{URL: natsURL})
 	if err != nil {
@@ -58,9 +59,9 @@ func main() {
 		cancel()
 	}()
 
-	log.Println("HTTP executor started")
+	log.Printf("HTTP executor started (subject=%s)", needSubject)
 
-	_, err = bus.Subscribe("archon.need.http", func(ctx context.Context, msg events.Message) error {
+	_, err = bus.Subscribe(needSubject, func(ctx context.Context, msg events.Message) error {
 		var event needEvent
 		if err := json.Unmarshal(msg.Data(), &event); err != nil {
 			return err
@@ -157,11 +158,4 @@ func postWebhook(ctx context.Context, apiURL, correlationID string, payload []by
 		return fmt.Errorf("webhook failed: %s", resp.Status)
 	}
 	return nil
-}
-
-func getenv(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return fallback
 }

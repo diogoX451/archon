@@ -71,6 +71,7 @@ Esses invariantes são verificados no momento do registro de regras.
 - **http**
   - principal: `trigger`
   - auxiliares: `response`
+  - resposta: sempre retorna JSON com `ok` (true/false); em erro inclui `status`, `error`, `body`, `headers`
 
 ---
 
@@ -229,6 +230,12 @@ ARCHON_API_URL=http://localhost:8080 \
 go run cmd/http-executor/main.go
 ```
 
+Para consumir needs customizados (ex.: `archon.need.consulta-car`), rode com:
+```
+ARCHON_NEED_SUBJECT=archon.need.> \
+go run cmd/http-executor/main.go
+```
+
 ---
 
 ## Como rodar
@@ -264,6 +271,8 @@ go run cmd/http-executor/main.go
 
 - **Nenhuma interação executa**: verifique se existe regra para o par de símbolos.
 - **Erro “filtered consumer not unique on workqueue stream”**: há consumers antigos com o mesmo filtro; reinicie ou remova consumers.
+- **NUI mostra erro “multiple non-filtered consumers not allowed on workqueue stream”**: o stream `ARCHON_INTERACTIONS` usa workqueue. Para visualizar no NUI, rode com `ARCHON_INTERACTIONS_RETENTION=limits` (ou `interest`) e reinicie API/worker.
+- **Poucos logs no worker**: inicie com `ARCHON_LOG_EVENTS=1` para imprimir eventos recebidos/produzidos.
 - **HTTPAgent não responde**: verifique se o executor HTTP está rodando.
 
 ---
@@ -271,4 +280,3 @@ go run cmd/http-executor/main.go
 ## Referência
 
 Lafont, Yves — “Interaction Nets”, POPL 1990.
-

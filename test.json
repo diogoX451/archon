@@ -1,0 +1,111 @@
+{
+  "rules": [
+    {
+      "agent_a_type": "transform",
+      "agent_b_type": "http",
+      "agents": [
+        {
+          "id": "x",
+          "type": "transform",
+          "config": {
+            "rules": []
+          }
+        },
+        {
+          "id": "y",
+          "type": "http",
+          "config": {
+            "method": "POST",
+            "url": "",
+            "headers": {},
+            "timeout": 30,
+            "need_type": "http"
+          }
+        }
+      ],
+      "connections": [
+        {
+          "from": {
+            "agent_id": "x",
+            "port": "output"
+          },
+          "to": {
+            "agent_id": "y",
+            "port": "trigger"
+          }
+        }
+      ],
+      "interface": [
+        {
+          "external": {
+            "side": "A",
+            "port": "output"
+          },
+          "internal": {
+            "agent_id": "x",
+            "port": "input"
+          }
+        },
+        {
+          "external": {
+            "side": "B",
+            "port": "response"
+          },
+          "internal": {
+            "agent_id": "y",
+            "port": "response"
+          }
+        }
+      ]
+    }
+  ],
+  "workflow": {
+    "user_id": "user_fluxo_car_drc",
+    "agents": [
+      {
+        "id": "t_init",
+        "type": "transform",
+        "config": {
+          "rules": [
+            {
+              "from": "car",
+              "to": "body.car"
+            },
+            {
+              "from": "cpf_cnpj",
+              "to": "body.cpf_cnpj"
+            },
+            {
+              "from": "cpf_cnpj",
+              "to": "body.documento_produtor"
+            }
+          ]
+        }
+      },
+      {
+        "id": "http_consulta_car",
+        "type": "http",
+        "config": {
+          "method": "POST",
+          "url": "https://example.local/cadastro/consulta-car",
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": "{\"car\": \"{{body.car}}\", \"cpf_cnpj\": \"{{body.cpf_cnpj}}\", \"documento_produtor\": \"{{body.documento_produtor}}\"}",
+          "timeout": 30,
+          "need_type": "consulta-car"
+        }
+      }
+    ],
+    "connections": [
+      {
+        "from": "t_init:input",
+        "to": "http_consulta_car:trigger"
+      }
+    ],
+    "input": {
+      "car": "RS-4309001-50432B425FBE401E9C9D1D8D1A773F10",
+      "cpf_cnpj": "00100200304"
+    }
+  }
+}
