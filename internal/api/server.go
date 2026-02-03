@@ -10,22 +10,24 @@ import (
 
 	"github.com/diogoX451/archon/internal/api/dto"
 	"github.com/diogoX451/archon/internal/core/ports"
+	"github.com/diogoX451/archon/internal/store"
 )
 
 // Server encapsula todas dependências da API
 type Server struct {
-	router    *chi.Mux
-	eventBus  ports.EventBus
-	ruleStore RuleStore
-	// TODO: adicionar repo quando implementar queries
+	router     *chi.Mux
+	eventBus   ports.EventBus
+	ruleStore  RuleStore
+	stateStore store.StateStore
 }
 
 // NewServer cria server com dependências injetadas
-func NewServer(eventBus ports.EventBus, ruleStore RuleStore) *Server {
+func NewServer(eventBus ports.EventBus, stateStore store.StateStore, ruleStore RuleStore) *Server {
 	s := &Server{
-		router:    chi.NewRouter(),
-		eventBus:  eventBus,
-		ruleStore: ruleStore,
+		router:     chi.NewRouter(),
+		eventBus:   eventBus,
+		ruleStore:  ruleStore,
+		stateStore: stateStore,
 	}
 
 	s.setupMiddleware()

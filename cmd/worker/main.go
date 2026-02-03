@@ -7,7 +7,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -100,13 +102,36 @@ func runWorker(
 	rules *domain.RuleRegistry,
 	logEvents bool,
 ) error {
+	locker := newNetLocker()
+	maxParallel := readMaxParallelPairs()
+
 	// Handler para interações
 	interactionHandler := func(ctx context.Context, netID string, pair domain.ActivePair) error {
 		if logEvents {
 			log.Printf("interaction pending net=%s pair=%s:%s", netID, pair.AgentAID, pair.AgentBID)
 		}
-		if err := executor.ExecuteInteraction(ctx, netID, pair); err != nil {
-			log.Printf("interaction error net=%s pair=%s:%s err=%v", netID, pair.AgentAID, pair.AgentBID, err)
+		unlock := locker.Lock(netID)
+		defer unlock()
+
+		lockToken, ok, err := store.AcquireNetLock(ctx, netID, readNetLockTTL())
+		if err != nil {
+			log.Printf("net lock error net=%s err=%v", netID, err)
+			return err
+		}
+		if !ok {
+			if logEvents {
+				log.Printf("net locked net=%s", netID)
+			}
+			return fmt.Errorf("net locked: %s", netID)
+		}
+		defer func() {
+			if err := store.ReleaseNetLock(ctx, netID, lockToken); err != nil && logEvents {
+				log.Printf("net unlock error net=%s err=%v", netID, err)
+			}
+		}()
+
+		if err := executor.ExecutePendingPairs(ctx, netID, maxParallel); err != nil {
+			log.Printf("interaction error net=%s err=%v", netID, err)
 			return err
 		}
 		return nil
@@ -203,6 +228,48 @@ func runWorker(
 
 	<-ctx.Done()
 	return nil
+}
+
+type netLocker struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newNetLocker() *netLocker {
+	return &netLocker{
+		locks: make(map[string]*sync.Mutex),
+	}
+}
+
+func (l *netLocker) Lock(netID string) func() {
+	l.mu.Lock()
+	lock, ok := l.locks[netID]
+	if !ok {
+		lock = &sync.Mutex{}
+		l.locks[netID] = lock
+	}
+	l.mu.Unlock()
+
+	lock.Lock()
+	return lock.Unlock
+}
+
+func readMaxParallelPairs() int {
+	raw := strings.TrimSpace(types.Getenv("ARCHON_MAX_PARALLEL_PAIRS", "4"))
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 1
+	}
+	return value
+}
+
+func readNetLockTTL() time.Duration {
+	raw := strings.TrimSpace(types.Getenv("ARCHON_NET_LOCK_TTL_SECONDS", "30"))
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return 30 * time.Second
+	}
+	return time.Duration(value) * time.Second
 }
 
 func handleSpawn(

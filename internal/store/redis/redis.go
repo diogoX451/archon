@@ -10,6 +10,7 @@ import (
 
 	"github.com/diogoX451/archon/internal/store"
 	"github.com/diogoX451/archon/pkg/types"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -90,6 +91,10 @@ func (r *RedisStore) ruleKey(aType, bType string) string {
 
 func (r *RedisStore) rulesIndexKey() string {
 	return "rules:index"
+}
+
+func (r *RedisStore) netLockKey(netID string) string {
+	return fmt.Sprintf("lock:net:%s", netID)
 }
 
 func (r *RedisStore) CreateWorkflow(ctx context.Context, state *types.WorkflowState) error {
@@ -519,4 +524,33 @@ func (r *RedisStore) ListRules(ctx context.Context) ([]types.RuleDef, error) {
 	}
 
 	return result, nil
+}
+
+func (r *RedisStore) AcquireNetLock(ctx context.Context, netID string, ttl time.Duration) (string, bool, error) {
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	token := uuid.NewString()
+	ok, err := r.client.SetNX(ctx, r.netLockKey(netID), token, ttl).Result()
+	if err != nil {
+		return "", false, err
+	}
+	if !ok {
+		return "", false, nil
+	}
+	return token, true, nil
+}
+
+func (r *RedisStore) ReleaseNetLock(ctx context.Context, netID, token string) error {
+	if token == "" {
+		return nil
+	}
+	script := `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+	return redis.call("DEL", KEYS[1])
+else
+	return 0
+end
+`
+	return r.client.Eval(ctx, script, []string{r.netLockKey(netID)}, token).Err()
 }

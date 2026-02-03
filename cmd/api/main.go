@@ -53,7 +53,7 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	server := api.NewServer(eventBus, redisClient)
+	server := api.NewServer(eventBus, redisClient, redisClient)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.App.Port,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
 	"github.com/diogoX451/archon/internal/core/domain"
 	"github.com/diogoX451/archon/internal/core/ports"
@@ -29,6 +31,95 @@ func (e *Executor) FindWaitingAgent(ctx context.Context, correlationID string) (
 	return e.repo.FindWaitingAgent(ctx, correlationID)
 }
 
+// ExecutePendingPairs processa pares ativos em batches com paralelismo limitado.
+// Um mesmo agente não participa de dois pares no mesmo batch.
+func (e *Executor) ExecutePendingPairs(ctx context.Context, netID string, maxParallel int) error {
+	if maxParallel <= 0 {
+		maxParallel = 1
+	}
+
+	net, err := e.repo.Load(ctx, netID)
+	if err != nil {
+		return fmt.Errorf("load net: %w", err)
+	}
+
+	idleRounds := 0
+
+	for {
+		active := net.GetActivePairs()
+		if len(active) == 0 {
+			break
+		}
+
+		batch := selectDisjointPairs(active, maxParallel)
+		if len(batch) == 0 {
+			idleRounds++
+			if idleRounds >= 10 {
+				break
+			}
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		idleRounds = 0
+
+		pairInputs := make([]domain.Data, len(batch))
+		results := make([]*domain.InteractionResult, len(batch))
+		errors := make([]error, len(batch))
+
+		sem := make(chan struct{}, maxParallel)
+		var wg sync.WaitGroup
+
+		for i, pair := range batch {
+			pairInputs[i] = pairInputFromNet(net, pair)
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int, pair domain.ActivePair) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				res, err := net.ReducePair(ctx, pair, e.rules, e.registry)
+				if err != nil {
+					errors[i] = err
+					return
+				}
+				results[i] = res
+			}(i, pair)
+		}
+
+		wg.Wait()
+
+		for i, result := range results {
+			if result == nil {
+				if errors[i] != nil {
+					log.Printf("interaction error net=%s pair=%s:%s err=%v",
+						netID, batch[i].AgentAID, batch[i].AgentBID, errors[i])
+				}
+				continue
+			}
+
+			if err := e.applyRewrite(net, batch[i], result); err != nil {
+				return fmt.Errorf("apply rewrite: %w", err)
+			}
+
+			if err := e.publishNeedsForSpawn(ctx, net, result.Spawn, pairInputs[i]); err != nil {
+				return fmt.Errorf("publish needs: %w", err)
+			}
+
+			if result.IsFinal {
+				if err := e.eventBus.PublishResult(ctx, netID, result.Output); err != nil {
+					log.Printf("failed to publish result: %v", err)
+				}
+			}
+		}
+
+		if err := e.repo.Save(ctx, net); err != nil {
+			return fmt.Errorf("save net: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // ExecuteInteraction processa um par ativo completo
 func (e *Executor) ExecuteInteraction(ctx context.Context, netID string, pair domain.ActivePair) error {
 	// 1. Carrega net
@@ -38,23 +129,7 @@ func (e *Executor) ExecuteInteraction(ctx context.Context, netID string, pair do
 	}
 
 	// 2. Captura input de fallback a partir do par (se existir)
-	var pairInput domain.Data
-	if a, ok := net.GetAgent(pair.AgentAID); ok {
-		if a.GetOutput() != nil {
-			pairInput = a.GetOutput()
-		} else if a.GetInput() != nil {
-			pairInput = a.GetInput()
-		}
-	}
-	if pairInput == nil {
-		if b, ok := net.GetAgent(pair.AgentBID); ok {
-			if b.GetOutput() != nil {
-				pairInput = b.GetOutput()
-			} else if b.GetInput() != nil {
-				pairInput = b.GetInput()
-			}
-		}
-	}
+	pairInput := pairInputFromNet(net, pair)
 
 	// 3. Executa interação (core puro!)
 	result, err := net.ReducePair(ctx, pair, e.rules, e.registry)
@@ -91,6 +166,44 @@ func (e *Executor) ExecuteInteraction(ctx context.Context, netID string, pair do
 	}
 
 	return nil
+}
+
+func pairInputFromNet(net *domain.Net, pair domain.ActivePair) domain.Data {
+	var pairInput domain.Data
+	if a, ok := net.GetAgent(pair.AgentAID); ok {
+		if a.GetOutput() != nil {
+			pairInput = a.GetOutput()
+		} else if a.GetInput() != nil {
+			pairInput = a.GetInput()
+		}
+	}
+	if pairInput == nil {
+		if b, ok := net.GetAgent(pair.AgentBID); ok {
+			if b.GetOutput() != nil {
+				pairInput = b.GetOutput()
+			} else if b.GetInput() != nil {
+				pairInput = b.GetInput()
+			}
+		}
+	}
+	return pairInput
+}
+
+func selectDisjointPairs(pairs []domain.ActivePair, limit int) []domain.ActivePair {
+	used := make(map[string]bool, len(pairs)*2)
+	result := make([]domain.ActivePair, 0, len(pairs))
+	for _, pair := range pairs {
+		if used[pair.AgentAID] || used[pair.AgentBID] {
+			continue
+		}
+		used[pair.AgentAID] = true
+		used[pair.AgentBID] = true
+		result = append(result, pair)
+		if limit > 0 && len(result) >= limit {
+			break
+		}
+	}
+	return result
 }
 
 func (e *Executor) publishNeedsForSpawn(ctx context.Context, net *domain.Net, spawned []domain.Agent, fallbackInput domain.Data) error {

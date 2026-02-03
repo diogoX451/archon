@@ -452,7 +452,6 @@ func (n *Net) ReducePair(ctx context.Context, pair ActivePair, rules *RuleRegist
 	if err != nil {
 		return nil, err
 	}
-	n.UpdatedAt = time.Now()
 	return result, nil
 }
 

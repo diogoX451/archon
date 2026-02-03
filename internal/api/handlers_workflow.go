@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/diogoX451/archon/internal/api/dto"
@@ -84,32 +85,178 @@ func (s *Server) handleCreateWorkflow(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetWorkflow(w http.ResponseWriter, r *http.Request) {
 	workflowID := chi.URLParam(r, "id")
 
-	// TODO: Implementar query no repository
-	_ = workflowID
+	if s.stateStore == nil {
+		respondError(w, http.StatusNotImplemented, "STATE_STORE_DISABLED", "state store not configured")
+		return
+	}
 
-	respondError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "query not yet implemented")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	state, err := s.stateStore.GetWorkflow(ctx, types.WorkflowID(workflowID))
+	if err != nil {
+		if isWorkflowNotFound(err) {
+			respondError(w, http.StatusNotFound, "WORKFLOW_NOT_FOUND", err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "WORKFLOW_QUERY_FAILED", err.Error())
+		return
+	}
+
+	respondJSON(w, http.StatusOK, state)
 }
 
 // Handler: GET /api/v1/workflows/{id}/status
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	workflowID := chi.URLParam(r, "id")
 
-	// TODO: Buscar status no Redis
-	_ = workflowID
+	if s.stateStore == nil {
+		respondError(w, http.StatusNotImplemented, "STATE_STORE_DISABLED", "state store not configured")
+		return
+	}
 
-	// Placeholder
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	state, err := s.stateStore.GetWorkflow(ctx, types.WorkflowID(workflowID))
+	if err != nil {
+		if isWorkflowNotFound(err) {
+			respondError(w, http.StatusNotFound, "WORKFLOW_NOT_FOUND", err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "WORKFLOW_QUERY_FAILED", err.Error())
+		return
+	}
+
+	status := deriveWorkflowStatus(state)
+
 	respondJSON(w, http.StatusOK, dto.WorkflowStatusResponse{
 		WorkflowID: workflowID,
-		Status:     "pending",
-		UpdatedAt:  time.Now(),
+		Status:     string(status),
+		UpdatedAt:  state.UpdatedAt,
 	})
 }
 
 // Handler: GET /api/v1/workflows/{id}/result
 func (s *Server) handleGetResult(w http.ResponseWriter, r *http.Request) {
 	workflowID := chi.URLParam(r, "id")
-	_ = workflowID
 
-	// TODO: Buscar resultado quando completed
-	respondError(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "result query not yet implemented")
+	if s.stateStore == nil {
+		respondError(w, http.StatusNotImplemented, "STATE_STORE_DISABLED", "state store not configured")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	state, err := s.stateStore.GetWorkflow(ctx, types.WorkflowID(workflowID))
+	if err != nil {
+		if isWorkflowNotFound(err) {
+			respondError(w, http.StatusNotFound, "WORKFLOW_NOT_FOUND", err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, "WORKFLOW_QUERY_FAILED", err.Error())
+		return
+	}
+
+	status := deriveWorkflowStatus(state)
+	output, finishedAt, ok := latestCompletedOutput(state)
+
+	response := dto.WorkflowResultResponse{
+		WorkflowID: workflowID,
+		Status:     string(status),
+	}
+
+	if status == types.WorkflowCompleted && ok {
+		response.Output = output
+		response.FinishedAt = finishedAt
+	}
+	if status == types.WorkflowFailed {
+		response.FinishedAt = state.UpdatedAt
+	}
+
+	if status == types.WorkflowCompleted || status == types.WorkflowFailed {
+		respondJSON(w, http.StatusOK, response)
+		return
+	}
+
+	respondJSON(w, http.StatusAccepted, response)
+}
+
+func deriveWorkflowStatus(state *types.WorkflowState) types.WorkflowStatus {
+	if state == nil {
+		return types.WorkflowFailed
+	}
+	if len(state.Agents) == 0 {
+		if state.Status != "" {
+			return state.Status
+		}
+		return types.WorkflowRunning
+	}
+
+	hasWaiting := len(state.Waiting) > 0
+	hasRunning := false
+	completedCount := 0
+
+	for _, agent := range state.Agents {
+		switch agent.State {
+		case types.StateFailed:
+			return types.WorkflowFailed
+		case types.StateWaiting:
+			hasWaiting = true
+		case types.StateRunning:
+			hasRunning = true
+		case types.StateCompleted:
+			completedCount++
+		}
+	}
+
+	if completedCount == len(state.Agents) {
+		return types.WorkflowCompleted
+	}
+	if hasWaiting {
+		return types.WorkflowWaiting
+	}
+	if hasRunning {
+		return types.WorkflowRunning
+	}
+	if state.Status != "" {
+		return state.Status
+	}
+	return types.WorkflowRunning
+}
+
+func latestCompletedOutput(state *types.WorkflowState) (types.Data, time.Time, bool) {
+	if state == nil {
+		return nil, time.Time{}, false
+	}
+
+	var (
+		bestOutput types.Data
+		bestTime   time.Time
+		found      bool
+	)
+
+	for _, agent := range state.Agents {
+		if agent.State != types.StateCompleted {
+			continue
+		}
+		if len(agent.Output) == 0 {
+			continue
+		}
+		if !found || agent.UpdatedAt.After(bestTime) {
+			bestOutput = agent.Output
+			bestTime = agent.UpdatedAt
+			found = true
+		}
+	}
+
+	return bestOutput, bestTime, found
+}
+
+func isWorkflowNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "workflow not found")
 }
