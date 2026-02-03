@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  nats:
+    image: nats:latest
+    command: "--jetstream --store_dir=/data"
+    ports:
+      - "4222:4222"
+    volumes:
+      - nats-data:/data
+
+  redis:
+    image: redis:latest
+    command: "redis-server --appendonly yes"
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  nats-ui:
+    image: ghcr.io/nats-nui/nui:latest
+    ports:
+      - "31311:31311"
+    volumes:
+      - ./nui-db:/db
+      - ./nats-creds:/nats-creds:ro
+    depends_on:
+      - nats
+
+  archon-engine:
+    build: .
+    environment:
+      - NATS_URL=nats
+      - REDIS_URL=redis
+      - HEARTBEAT_MS=100  
+    depends_on:
+      - nats
+      - redis
+
+volumes:
+  nats-data:
+  redis-data:

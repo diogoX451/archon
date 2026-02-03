@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "archon.plan.schema.json",
+  "title": "Archon Plan",
+  "type": "object",
+  "required": ["workflow"],
+  "properties": {
+    "rules": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/rule"}
+    },
+    "workflow": {"$ref": "#/$defs/workflow"},
+    "add_agents": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/agent"}
+    },
+    "connections": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/connection"}
+    }
+  },
+  "$defs": {
+    "workflow": {
+      "type": "object",
+      "required": ["user_id", "agents"],
+      "properties": {
+        "user_id": {"type": "string"},
+        "agents": {"type": "array", "items": {"$ref": "#/$defs/agent"}},
+        "connections": {"type": "array", "items": {"$ref": "#/$defs/connection_def"}},
+        "input": {}
+      }
+    },
+    "agent": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "config": {}
+      }
+    },
+    "connection_def": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "as": {"type": "string"}
+      }
+    },
+    "connection": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": {"$ref": "#/$defs/port_ref"},
+        "to": {"$ref": "#/$defs/port_ref"}
+      }
+    },
+    "port_ref": {
+      "type": "object",
+      "required": ["agent_id", "port"],
+      "properties": {
+        "agent_id": {"type": "string"},
+        "port": {"type": "string"}
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": ["agent_a_type", "agent_b_type", "agents", "interface"],
+      "properties": {
+        "agent_a_type": {"type": "string"},
+        "agent_b_type": {"type": "string"},
+        "agents": {"type": "array", "items": {"$ref": "#/$defs/agent"}},
+        "connections": {"type": "array", "items": {"$ref": "#/$defs/rule_connection"}},
+        "interface": {"type": "array", "items": {"$ref": "#/$defs/rule_interface"}}
+      }
+    },
+    "rule_connection": {
+      "type": "object",
+      "required": ["from", "to"],
+      "properties": {
+        "from": {"$ref": "#/$defs/port_ref"},
+        "to": {"$ref": "#/$defs/port_ref"}
+      }
+    },
+    "rule_interface": {
+      "type": "object",
+      "required": ["external", "internal"],
+      "properties": {
+        "external": {"$ref": "#/$defs/rule_external"},
+        "internal": {"$ref": "#/$defs/port_ref"}
+      }
+    },
+    "rule_external": {
+      "type": "object",
+      "required": ["side", "port"],
+      "properties": {
+        "side": {"type": "string", "enum": ["A", "B"]},
+        "port": {"type": "string"}
+      }
+    }
+  }
+}

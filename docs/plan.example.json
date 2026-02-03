@@ -1,0 +1,27 @@
+{
+  "rules": [
+    {
+      "agent_a_type": "calculator",
+      "agent_b_type": "transform",
+      "agents": [
+        {"id": "x", "type": "calculator", "config": {"operation": "sum"}}
+      ],
+      "connections": [],
+      "interface": [
+        {"external": {"side": "A", "port": "output"}, "internal": {"agent_id": "x", "port": "input"}},
+        {"external": {"side": "B", "port": "input"}, "internal": {"agent_id": "x", "port": "output"}}
+      ]
+    }
+  ],
+  "workflow": {
+    "user_id": "user_123",
+    "agents": [
+      {"id": "calc1", "type": "calculator", "config": {"operation": "sum"}},
+      {"id": "t1", "type": "transform", "config": {"rules": [{"from": "result", "to": "sum"}]}}
+    ],
+    "connections": [
+      {"from": "calc1:output", "to": "t1:input"}
+    ],
+    "input": [1,2,3]
+  }
+}
